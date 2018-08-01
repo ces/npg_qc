@@ -33,6 +33,7 @@ my $temp = tempdir( CLEANUP => 1);
                     adapter          => 1,
                     split_stats      => 1,
                     spatial_filter   => 1,
+                    bcfstats         => 1,
                     gc_fraction      => 1,
                     gc_bias          => 1,
                     genotype         => 1,

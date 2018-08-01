@@ -84,6 +84,7 @@ my $requires = {
                 'npg_tracking::data::reference::list'      => 0,
                 'npg_tracking::data::bait::find'           => 0,
                 'npg_tracking::data::snv::find'            => 0,
+                'npg_tracking::data::geno_refset::find'    => 0,
                 'npg_tracking::glossary::composition'      => 0,
                 'npg_tracking::glossary::composition::factory' => 0,
                 'npg_tracking::glossary::composition::factory::attributes' => 0,
