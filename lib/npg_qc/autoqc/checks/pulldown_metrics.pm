@@ -14,8 +14,11 @@ with qw(npg_tracking::data::bait::find
 
 our $VERSION = '0';
 
-Readonly::Scalar my $PICARD_JAR_NAME    => q[CalculateHsMetrics.jar];
+Readonly::Scalar my $PICARD_JAR_NAME    => q[picard.jar];
+Readonly::Scalar my $PICARD_TOOL        => q[CollectHsMetrics];
 Readonly::Scalar my $MAX_JAVA_HEAP_SIZE => q[3000m];
+Readonly::Scalar my $PICARD_PARSE_END   => q[HISTOGRAM];
+Readonly::Scalar my $COVERAGE_CAP       => 10000;
 Readonly::Scalar my $MINUS_ONE          => -1;
 Readonly::Scalar my $MIN_ON_BAIT_BASES_PERCENTAGE => 20;
 
@@ -37,7 +40,7 @@ Readonly::Hash   my %PICARD_METRICS_FIELDS_MAPPING => {
     'HS_LIBRARY_SIZE'      => 'library_size',
                                        };
 
-has '+file_type'         => (default => 'bam',);
+has '+file_type'         => (default => 'cram',);
 has '+aligner'           => (default => 'fasta',);
 
 has 'alignments_in_bam'  => (
@@ -49,6 +52,23 @@ sub _build_alignments_in_bam {
     my ($self) = @_;
     return $self->lims->alignments_in_bam;
 }
+
+has 'reference_fasta' => (
+  is      => q[ro],
+  isa     => q[Str | Undef],
+  lazy    => 1,
+  builder => q[_build_reference_fasta],
+);
+sub _build_reference_fasta {
+  my ($self) = shift;
+  return $self->refs->[0];
+}
+
+has 'coverage_cap' => (
+    is      => 'ro',
+    isa     => 'Str',
+    default => $COVERAGE_CAP,
+);
 
 has 'max_java_heap_size' => (
     is      => 'ro',
@@ -71,9 +91,12 @@ has 'picard_command' => (
 
 sub _build_picard_command {
     my $self = shift;
-    my $command = $self->java_cmd . sprintf q[ -Xmx%s -jar %s VALIDATION_STRINGENCY=SILENT BAIT_INTERVALS=%s TARGET_INTERVALS=%s INPUT=%s OUTPUT=/dev/stdout],
+    my $command = $self->java_cmd . sprintf q[ -Xmx%s -jar %s %s VALIDATION_STRINGENCY=SILENT COVERAGE_CAP=%s REFERENCE_SEQUENCE=%s BAIT_INTERVALS=%s TARGET_INTERVALS=%s OUTPUT=/dev/stdout INPUT=%s],
         $self->max_java_heap_size,
         $self->picard_jar_path,
+        $PICARD_TOOL,
+        $self->coverage_cap,
+        $self->reference_fasta,
         $self->bait_intervals_path,
         $self->target_intervals_path,
         $self->input_files->[0];
@@ -117,15 +140,17 @@ override 'execute' => sub {
     }
 
     $self->result->set_info( 'Aligner', qq[Picard $PICARD_JAR_NAME] );
-    $self->result->set_info( 'Aligner_version', $self->current_version($self->picard_jar_path) );
+    $self->result->set_info( 'Aligner_version', $self->current_version($self->picard_jar_path,$PICARD_TOOL) );
     $self->result->bait_path($self->bait_path);
 
     my $command = $self->picard_command;
-    ## no critic (ProhibitTwoArgOpen InputOutput::RequireBriefOpen)
-    open my $fh, "$command |" or croak qq[Cannot fork "$command". $ERRNO];
-    ## use critic
 
-    my $results = $self->_parse_metrics($fh);
+    my $output;
+    open my $fh, q{-|}, qq{$command} or croak qq[Cannot fork "$command". $ERRNO];
+    while(<$fh>){ $output .= $_ };
+    close $fh or croak qq[Cannot close pipe in __PACKAGE__ : $ERRNO, $CHILD_ERROR];
+  
+    my $results = $self->_parse_metrics($output);
 
     if($self->_interval_files_identical) {
         $self->result->interval_files_identical(1);
@@ -143,20 +168,18 @@ override 'execute' => sub {
 };
 
 sub _parse_metrics {
-    my ($self, $fh) = @_;
-    if (!$fh) {
-        croak q[File handle is not available, cannot parse picard pulldown metrics];
+    my ($self, $output) = @_;
+    if (!$output) {
+        croak q[No output available, cannot parse picard pulldown metrics];
     }
     my @lines = ();
-    while (my $line = <$fh>) {
-        ## no critic (RequireExtendedFormatting)
-        if ( $line =~ /^#/sm ) { next; }
-        ## use critic
+    foreach my $line ( split /\n/, $output ) {
+        if ( $line =~ /^\#\#\s*$PICARD_PARSE_END/smx ) { last; }
+        elsif ( $line =~ /^\#/smx ) { next; }
         chomp $line;
         if ($line =~ /^\s*$/smx) { next; }
         push @lines, $line;
     }
-    close $fh or croak qq[Cannot close pipe in __PACKAGE__ : $ERRNO, $CHILD_ERROR];
 
     if (scalar @lines != 2) {
         croak q[Wrong number of result lines, should be two lines];
@@ -240,6 +263,10 @@ npg_qc::autoqc::checks::pulldown_metrics
     Moose-based.
 
 =head2 alignments_in_bam
+
+=head2 reference_fasta
+
+=head2 coverage_cap
 
 =head2 max_java_heap_size
 
